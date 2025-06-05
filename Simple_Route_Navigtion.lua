@@ -1,7 +1,7 @@
 -- FFXIV Navigation Script for SomethingNeedDoing
 -- 
 -- Created by: Nil
--- Version: 1.0.0
+-- Version: 1.0.1
 --
 -- DESCRIPTION:
 -- This script automates navigation between 5 predefined points in FFXIV.
@@ -41,14 +41,28 @@ local navigationPoints = {
 -- Current point index
 local currentPoint = 1
 
--- Function to generate random wait time between 1 and 20000 milliseconds
+-- Function to generate random wait time between 1 and 10000 milliseconds
 local function getRandomWait()
-    return math.random(1, 20000)
+    return math.random(1, 10000)
 end
 
 -- Function to check if player has a target
 local function hasTarget()
     return GetTargetName() ~= nil and GetTargetName() ~= ""
+end
+
+-- Function to get distance to current target
+local function getTargetDistance()
+    if hasTarget() then
+        return GetDistanceToTarget()
+    end
+    return 999 -- Return high value if no target
+end
+
+-- Function to check if target is within acceptable range
+local function isTargetInRange(maxDistance)
+    maxDistance = maxDistance or 10 -- Default to 10 if not specified
+    return hasTarget() and getTargetDistance() <= maxDistance
 end
 
 -- Function to target closest attackable enemy and attack
@@ -57,11 +71,14 @@ local function targetAndAttack()
         yield("/targetenemy") -- Target closest enemy
         yield("/wait 0.5") -- Small delay to ensure targeting completes
         
-        if hasTarget() then
+        if isTargetInRange(10) then
             -- Move to the target's actual position using vnavmesh
             yield("/vnavmesh moveto")
             yield("/wait 1") -- Wait for movement to start
             yield("/automove on") -- Enable auto-attack by moving toward target
+        elseif hasTarget() then
+            -- Target is too far, clear it by targeting self
+            yield("/target <me>")
         end
     end
 end
@@ -135,14 +152,22 @@ local function mainLoop()
             
             -- If we found a target, immediately stop everything
             if hasTarget() then
-                targetFound = true
-                yield("/echo Target found! Force stopping navigation...")
-                -- Aggressive stop commands
-                yield("/vnav stop")
-                yield("/automove off")
-                yield("/vnav stop")
-                yield("/wait 1") -- Longer wait to ensure full stop
-                break -- Force exit immediately
+                -- Check if target is within acceptable range
+                local distance = getTargetDistance()
+                if distance <= 10 then
+                    targetFound = true
+                    yield("/echo Target found at distance " .. string.format("%.1f", distance) .. "! Force stopping navigation...")
+                    -- Aggressive stop commands
+                    yield("/vnav stop")
+                    yield("/automove off")
+                    yield("/vnav stop")
+                    yield("/wait 1") -- Longer wait to ensure full stop
+                    break -- Force exit immediately
+                else
+                    -- Target too far, ignore it and clear target by targeting self
+                    yield("/echo Target too far (" .. string.format("%.1f", distance) .. "), ignoring...")
+                    yield("/target <me>")
+                end
             elseif isInCombat() then
                 yield("/echo Combat detected! Stopping all movement...")
                 stopMovement()
@@ -161,7 +186,7 @@ local function mainLoop()
         end
         
         -- Handle target engagement after breaking out of movement loop
-        if targetFound and hasTarget() then
+        if targetFound and isTargetInRange(10) then
             yield("/echo Moving to engage target...")
             yield("/vnavmesh moveto") -- Move to target's position
             yield("/wait 1")

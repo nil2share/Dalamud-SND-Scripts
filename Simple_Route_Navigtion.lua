@@ -1,6 +1,7 @@
 -- FFXIV Navigation Script for SomethingNeedDoing
 -- 
 -- Created by: Nil
+-- Version: 1.0.0
 --
 -- DESCRIPTION:
 -- This script automates navigation between 5 predefined points in FFXIV.
@@ -40,9 +41,29 @@ local navigationPoints = {
 -- Current point index
 local currentPoint = 1
 
--- Function to generate random wait time between 1 and 10000 milliseconds
+-- Function to generate random wait time between 1 and 20000 milliseconds
 local function getRandomWait()
-    return math.random(1, 10000)
+    return math.random(1, 20000)
+end
+
+-- Function to check if player has a target
+local function hasTarget()
+    return GetTargetName() ~= nil and GetTargetName() ~= ""
+end
+
+-- Function to target closest attackable enemy and attack
+local function targetAndAttack()
+    if not hasTarget() then
+        yield("/targetenemy") -- Target closest enemy
+        yield("/wait 0.5") -- Small delay to ensure targeting completes
+        
+        if hasTarget() then
+            -- Move to the target's actual position using vnavmesh
+            yield("/vnavmesh moveto")
+            yield("/wait 1") -- Wait for movement to start
+            yield("/automove on") -- Enable auto-attack by moving toward target
+        end
+    end
 end
 
 -- Function to check if player is in combat
@@ -59,6 +80,7 @@ end
 local function stopMovement()
     yield("/vnav stop")
     yield("/automove off")
+    yield("/vnav stop") -- Call twice to ensure it stops
 end
 
 -- Function to wait until out of combat
@@ -68,6 +90,10 @@ local function waitForCombatEnd()
         if GetCharacterCondition(27) then -- If still moving
             stopMovement()
         end
+        
+        -- Try to target and attack if no target
+        targetAndAttack()
+        
         yield("/wait 0.5")
     end
 end
@@ -92,18 +118,65 @@ local function mainLoop()
         -- Navigate to the point
         navigateToPoint(targetPoint)
         
-        -- Wait for navigation to complete or until in combat
-        while GetCharacterCondition(27) do -- While moving
-            if isInCombat() then
+        -- Wait for navigation to complete or until target/combat found
+        local targetFound = false
+        local loopCount = 0
+        while not targetFound do -- Keep checking until target found or destination reached
+            -- Break if we're no longer moving AND no target found (reached destination)
+            if not GetCharacterCondition(27) then
+                break
+            end
+            
+            loopCount = loopCount + 1
+            -- Constantly check for targets while moving
+            if not hasTarget() then
+                yield("/targetenemy")
+            end
+            
+            -- If we found a target, immediately stop everything
+            if hasTarget() then
+                targetFound = true
+                yield("/echo Target found! Force stopping navigation...")
+                -- Aggressive stop commands
+                yield("/vnav stop")
+                yield("/automove off")
+                yield("/vnav stop")
+                yield("/wait 1") -- Longer wait to ensure full stop
+                break -- Force exit immediately
+            elseif isInCombat() then
                 yield("/echo Combat detected! Stopping all movement...")
                 stopMovement()
                 waitForCombatEnd()
                 yield("/echo Combat ended, resuming navigation...")
-                -- Resume navigation to the same point
                 navigateToPoint(targetPoint)
-            else
+            end
+            
+            yield("/wait 0.1")
+            
+            -- Safety check - if we've been in this loop too long, something's wrong
+            if loopCount > 1000 then
+                yield("/echo Navigation loop timeout, breaking...")
+                break
+            end
+        end
+        
+        -- Handle target engagement after breaking out of movement loop
+        if targetFound and hasTarget() then
+            yield("/echo Moving to engage target...")
+            yield("/vnavmesh moveto") -- Move to target's position
+            yield("/wait 1")
+            yield("/automove on") -- Enable auto-attack movement
+            -- Wait for combat to start or target to be lost
+            while hasTarget() and not isInCombat() do
                 yield("/wait 0.1")
             end
+            -- If combat started, wait for it to end
+            if isInCombat() then
+                waitForCombatEnd()
+            end
+            yield("/echo Combat ended, resuming navigation...")
+            -- Resume navigation to the original point
+            navigateToPoint(targetPoint)
         end
         
         -- Check if we reached the destination or if combat interrupted
@@ -124,8 +197,11 @@ local function mainLoop()
                     waitForCombatEnd()
                     -- Resume waiting from where we left off
                     waitStart = os.clock() - ((os.clock() - waitStart))
+                else
+                    -- Check for nearby enemies to engage during wait
+                    targetAndAttack()
                 end
-                yield("/wait 0.1")
+                yield("/wait 0.5") -- Slightly longer delay when checking for targets
             end
             
             -- Move to next point
